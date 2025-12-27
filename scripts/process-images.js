@@ -11,8 +11,27 @@ const SIZES = {
   full: { width: 2400, quality: 85 }
 };
 
+let processLog = {
+  startTime: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+  totalFiles: 0,
+  processedFiles: 0,
+  skippedFiles: 0,
+  errors: [],
+  compressionStats: []
+};
+
 function pad(num) {
   return String(num).padStart(3, "0");
+}
+
+function saveLog() {
+  if (!fs.existsSync('logs/image-processing')) fs.mkdirSync('logs/image-processing', { recursive: true });
+  
+  processLog.endTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  processLog.status = processLog.errors.length > 0 ? 'PARTIAL_SUCCESS' : 'SUCCESS';
+  
+  const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }).replace(/[/,: ]/g, '_');
+  fs.writeFileSync(`logs/image-processing/process_${timestamp}.json`, JSON.stringify(processLog, null, 2));
 }
 
 function loadManifest(album) {
@@ -67,42 +86,60 @@ async function extractMetadata(inputPath, album, seq, originalFile) {
         : null
     };
   } catch (err) {
-    console.warn(`⚠ Could not read EXIF for ${originalFile}`);
+    processLog.errors.push(`EXIF extraction failed for ${originalFile}: ${err.message}`);
     return null;
   }
 }
 
 async function processImage(album, file, seq) {
-  const inputPath = path.join(ORIGINALS_DIR, album, file);
-  const outputDir = path.join(GENERATED_DIR, album, pad(seq));
+  try {
+    const inputPath = path.join(ORIGINALS_DIR, album, file);
+    const outputDir = path.join(GENERATED_DIR, album, pad(seq));
+    const originalSize = fs.statSync(inputPath).size;
+    let totalCompressedSize = 0;
 
-  fs.mkdirSync(outputDir, { recursive: true });
+    fs.mkdirSync(outputDir, { recursive: true });
 
-  for (const [variant, opts] of Object.entries(SIZES)) {
-    const outPath = path.join(outputDir, `${variant}.webp`);
-    if (fs.existsSync(outPath)) continue;
+    for (const [variant, opts] of Object.entries(SIZES)) {
+      const outPath = path.join(outputDir, `${variant}.webp`);
+      if (fs.existsSync(outPath)) continue;
 
-    await sharp(inputPath)
-      .resize({ width: opts.width, withoutEnlargement: true })
-      .webp({ quality: opts.quality })
-      .toFile(outPath);
-  }
-
-  const metaPath = path.join(outputDir, "meta.json");
-  if (!fs.existsSync(metaPath)) {
-    const metadata = await extractMetadata(inputPath, album, seq, file);
-    if (metadata) {
-      fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2));
+      await sharp(inputPath)
+        .resize({ width: opts.width, withoutEnlargement: true })
+        .webp({ quality: opts.quality })
+        .toFile(outPath);
+      
+      totalCompressedSize += fs.statSync(outPath).size;
     }
-  }
 
-  console.log(`✔ ${album}/${pad(seq)} ← ${file}`);
+    const metaPath = path.join(outputDir, "meta.json");
+    if (!fs.existsSync(metaPath)) {
+      const metadata = await extractMetadata(inputPath, album, seq, file);
+      if (metadata) {
+        fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2));
+      }
+    }
+
+    processLog.compressionStats.push({
+      file: `${album}/${file}`,
+      originalSize,
+      compressedSize: totalCompressedSize,
+      ratio: ((1 - totalCompressedSize / originalSize) * 100).toFixed(1) + '%'
+    });
+    
+    processLog.processedFiles++;
+    console.log(`✔ ${album}/${pad(seq)} ← ${file}`);
+  } catch (err) {
+    processLog.errors.push(`Processing failed for ${album}/${file}: ${err.message}`);
+  }
 }
 
 async function run() {
   console.log("🚀 Image processing started");
 
   if (!fs.existsSync(ORIGINALS_DIR)) {
+    processLog.errors.push("images/originals directory does not exist");
+    saveLog();
     console.error("❌ images/originals does not exist");
     return;
   }
@@ -118,7 +155,9 @@ async function run() {
     const files = fs
       .readdirSync(albumPath)
       .filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f))
-      .sort(); // stable order
+      .sort();
+    
+    processLog.totalFiles += files.length;
 
     const manifest = loadManifest(album);
     const usedSeqs = Object.values(manifest).map(Number);
@@ -127,6 +166,7 @@ async function run() {
     for (const file of files) {
       if (manifest[file]) {
         console.log(`↪ Skipping ${file} (already processed)`);
+        processLog.skippedFiles++;
         continue;
       }
 
@@ -139,7 +179,8 @@ async function run() {
     saveManifest(album, manifest);
   }
 
-  console.log("✅ Image processing completed");
+  saveLog();
+  console.log(`✅ Processed: ${processLog.processedFiles}, Skipped: ${processLog.skippedFiles}, Errors: ${processLog.errors.length}`);
 }
 
 run();

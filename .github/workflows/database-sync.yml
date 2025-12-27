@@ -1,0 +1,38 @@
+name: Database Sync
+
+on:
+  push:
+    paths:
+      - "images/generated/**"
+  workflow_dispatch:
+
+jobs:
+  sync-database:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Generate sync commands
+        run: node scripts/sync-albums.js
+
+      - name: Execute database sync
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -f sync-db.sh ]; then
+            chmod +x sync-db.sh
+            ./sync-db.sh
+          else
+            echo "No database changes to sync"
+          fi

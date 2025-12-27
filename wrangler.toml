@@ -1,0 +1,8 @@
+name = "pr-verse"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pr-verse-db"
+database_id = "d364d468-3886-40ed-96c9-81a3e096d0b5"
